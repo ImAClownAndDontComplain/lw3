@@ -18,42 +18,73 @@ struct Vertex
 {
     vec3 m_pos;
     vec2 m_tex;
+    vec3 m_norm;
 
     Vertex(vec3 pos, vec2 tex)
     {
         m_pos = pos;
         m_tex = tex;
+        m_norm = vec3(0.0f, 0.0f, 0.0f);
     }
+};
+struct DirectionLight
+{
+    vec3 Color;
+    float AmbientIntensity;
+    vec3 Direction;
+    float DiffuseIntensity;
 };
 
 static const char* vertex = "                                                      \n\
     #version 330                                                                   \n\
     layout (location = 0) in vec3 pos;                                             \n\
     layout (location = 1) in vec2 tex;                                             \n\
+    layout (location = 2) in vec3 norm;                                            \n\
+    uniform mat4 gWVP;                                                             \n\
     uniform mat4 gWorld;                                                           \n\
     out vec2 tex0;                                                                 \n\
+    out vec3 norm0;                                                                \n\
     void main()                                                                    \n\
     {                                                                              \n\
-        gl_Position = gWorld * vec4(pos, 1.0);                                     \n\
+        gl_Position = gWVP * vec4(pos, 1.0);                                       \n\
         tex0 = tex;                                                                \n\
+        norm0 = (gWorld * vec4(norm, 0.0)).xyz;                                    \n\
     }";
 
 static const char* frag = "                                                         \n\
     #version 330                                                                    \n\
     in vec2 tex0;                                                                   \n\
+    in vec3 norm0;                                                                  \n\
     struct DirectionalLight                                                         \n\
     {                                                                               \n\
         vec3 Color;                                                                 \n\
         float AmbientIntensity;                                                     \n\
+        vec3 Direction;                                                             \n\
+        float DiffuseIntensity;                                                     \n\
     };                                                                              \n\
     uniform sampler2D gSampler;                                                     \n\
     uniform DirectionalLight gDirectionalLight;                                     \n\
     out vec4 fragcolor;                                                             \n\
     void main()                                                                     \n\
     {                                                                               \n\
-        fragcolor = texture2D(gSampler, tex0.xy)*                                   \n\
-        vec4(gDirectionalLight.Color, 1.0f) *                                       \n\
-                gDirectionalLight.AmbientIntensity;                                 \n\
+        vec4 AmbientColor = vec4(gDirectionalLight.Color, 1.0f) *                   \n\
+                        gDirectionalLight.AmbientIntensity;                         \n\
+                                                                                    \n\
+        float DiffuseFactor = dot(normalize(norm0), -gDirectionalLight.Direction);  \n\
+                                                                                    \n\
+        vec4 DiffuseColor;                                                          \n\
+                                                                                    \n\
+        if (DiffuseFactor > 0){                                                     \n\
+            DiffuseColor = vec4(gDirectionalLight.Color, 1.0f) *                    \n\
+                       gDirectionalLight.DiffuseIntensity *                         \n\
+                       DiffuseFactor;                                               \n\
+        }                                                                           \n\
+        else{                                                                       \n\
+            DiffuseColor = vec4(0,0,0,0);                                           \n\
+        }                                                                           \n\
+                                                                                    \n\
+        fragcolor = texture2D(gSampler, tex0.xy) *                             \n\
+                    (AmbientColor + DiffuseColor);                                  \n\
     }";
 
 class Pipeline
@@ -81,7 +112,8 @@ private:
     vec3 m_scale, m_trans, m_rot;
     projection myproj;
     camera mycam;
-    mat4 m_transform = m;
+    mat4 WVP = m;
+    mat4 World = m;
 
     vec3 cross(vec3 v1, vec3 v2) {
         float x = v1.y * v2.z - v1.z * v2.y;
@@ -166,7 +198,6 @@ public:
         m_scale = { 1.0f, 1.0f, 1.0f };
         m_trans = { 0.0f, 0.0f, 0.0f };
         m_rot = { 0.0f, 0.0f, 0.0f };
-        m_transform = m;
     }
     void scale(float x, float y, float z) {
         m_scale = { x, y,z };
@@ -189,21 +220,31 @@ public:
         mycam.target = target;
         mycam.up = up;
     }
-    mat4* GetTrans();
+    mat4* GetWVPTrans();
+    mat4* GetWorldTrans();
 };
-mat4* Pipeline::GetTrans()
+mat4* Pipeline::GetWVPTrans()
 {
     InitScaleTransform();
     InitRotateTransform();
     InitTranslationTransform();
+
+    WVP = ScaleTrans * RotateTrans * TransTrans;
+    //m_transform = ScaleTrans * RotateTrans * TransTrans * Proj;
+    //m_transform = ScaleTrans * RotateTrans * TransTrans * CamTrans * Cam * Proj;
+    return &WVP;
+}
+mat4* Pipeline::GetWorldTrans()
+{
+    GetWVPTrans();
     InitPerspective();
     InitCamera();
     InitCamTrans();
 
     //m_transform = ScaleTrans * RotateTrans * TransTrans;
     //m_transform = ScaleTrans * RotateTrans * TransTrans * Proj;
-    m_transform = ScaleTrans * RotateTrans * TransTrans * CamTrans * Cam * Proj;
-    return &m_transform;
+    World = WVP * CamTrans * Cam * Proj;
+    return &World;
 }
 
 class Texture {
@@ -328,18 +369,15 @@ public:
     void Enable() { glUseProgram(program); };
 };
 
-struct DirectionLight
-{
-    vec3 Color;
-    float AmbientIntensity;
-};
-
 class LightingTechnique : public Technique{
 private:
+    GLuint gWVPLocation;
     GLuint gWorldLocation;
     GLuint samplerLocation;
-    GLuint dirLightColorLocation;
-    GLuint dirLightAmbientIntensityLocation;
+    GLuint LightColor;
+    GLuint LightAmbientIntensity;
+    GLuint LightDirection;
+    GLuint LightDiffuseIntensity;
 public:
     LightingTechnique() {};
 
@@ -349,27 +387,38 @@ public:
         if (!AddShader(GL_FRAGMENT_SHADER, frag)) return false;
         if (!Link())  return false;
 
+        gWVPLocation = GetUniformLocation("gWVP");
         gWorldLocation = GetUniformLocation("gWorld");
         samplerLocation = GetUniformLocation("gSampler");
-        dirLightColorLocation = GetUniformLocation("gDirectionalLight.Color");
-        dirLightAmbientIntensityLocation = GetUniformLocation("gDirectionalLight.AmbientIntensity");
-
-        if (dirLightAmbientIntensityLocation == 0xFFFFFFFF || gWorldLocation == 0xFFFFFFFF || samplerLocation == 0xFFFFFFFF || dirLightColorLocation == 0xFFFFFFFF)  return false;
+        LightColor = GetUniformLocation("gDirectionalLight.Color");
+        LightAmbientIntensity = GetUniformLocation("gDirectionalLight.AmbientIntensity");
+        LightDirection = GetUniformLocation("gDirectionalLight.Direction");
+        LightDiffuseIntensity = GetUniformLocation("gDirectionalLight.DiffuseIntensity");
+        if (LightAmbientIntensity == 0xFFFFFFFF || gWorldLocation == 0xFFFFFFFF || samplerLocation == 0xFFFFFFFF || LightColor == 0xFFFFFFFF || LightDirection == 0xFFFFFFFF || LightDiffuseIntensity == 0xFFFFFFFF)  return false;
       
         return true;
     };
 
-    void SetgWorld(const mat4* gWorld) {
-            glUniformMatrix4fv(gWorldLocation, 1, GL_TRUE, (const GLfloat*)gWorld);      
+    void SetgWVP(const mat4* gWorld) {
+        glUniformMatrix4fv(gWVPLocation, 1, GL_TRUE, (const GLfloat*)gWorld);
     };
+
+    void SetWorld(const mat4* World)
+    {
+        glUniformMatrix4fv(gWorldLocation, 1, GL_TRUE, (const GLfloat*)World);
+    }
 
     void SetTextureUnit(unsigned int unit) {
         glUniform1i(samplerLocation, unit);
     };
 
     void SetDirectionalLight(const DirectionLight& Light) {
-        glUniform3f(dirLightColorLocation, Light.Color.x, Light.Color.y, Light.Color.z);
-        glUniform1f(dirLightAmbientIntensityLocation, Light.AmbientIntensity);
+        glUniform3f(LightColor, Light.Color.x, Light.Color.y, Light.Color.z);
+        glUniform1f(LightAmbientIntensity, Light.AmbientIntensity);
+        vec3 Direction = Light.Direction;
+        normalize(Direction);
+        glUniform3f(LightDirection, Direction.x, Direction.y, Direction.z);
+        glUniform1f(LightDiffuseIntensity, Light.DiffuseIntensity);
     };
 };
 
@@ -451,19 +500,41 @@ private:
         Vertex(vec3(0, 0.4, 0),vec2(0.5,1)),
         };
 
-        glGenBuffers(1, &VBO);
-        glBindBuffer(GL_ARRAY_BUFFER, VBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(Pyramid), Pyramid, GL_STATIC_DRAW);
 
         unsigned int Indices[] = { 0, 3, 1,
                                    1, 3, 2,
                                    2, 3, 0,
                                    0, 2, 1 };
 
+        calcnorms(Indices, 12, Pyramid, 4);
+
+        glGenBuffers(1, &VBO);
+        glBindBuffer(GL_ARRAY_BUFFER, VBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(Pyramid), Pyramid, GL_STATIC_DRAW);
+
 
         glGenBuffers(1, &IBO);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, IBO);
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(Indices), Indices, GL_STATIC_DRAW);
+    }
+    void calcnorms(const unsigned int* indices, unsigned int indcount, Vertex* vertices, unsigned int vertcount) {
+        for (unsigned int i = 0; i < indcount; i += 3) {
+            unsigned int Index0 = indices[i];
+            unsigned int Index1 = indices[i + 1];
+            unsigned int Index2 = indices[i + 2];
+            vec3 v1 = vertices[Index1].m_pos - vertices[Index0].m_pos;
+            vec3 v2 = vertices[Index2].m_pos - vertices[Index0].m_pos;
+            vec3 norm = cross(v1,v2);
+            normalize(norm);
+
+            vertices[Index0].m_norm += norm;
+            vertices[Index1].m_norm += norm;
+            vertices[Index2].m_norm += norm;
+        }
+
+        for (unsigned int i = 0; i < vertcount; i++) {
+            normalize(vertices[i].m_norm);
+        }
     }
 public:
     Main()
@@ -472,6 +543,8 @@ public:
         eff = nullptr;
         dirLight.Color = vec3(1.0f, 1.0f, 1.0f);
         dirLight.AmbientIntensity = 0.5f;
+        dirLight.DiffuseIntensity = 0.75f;
+        dirLight.Direction = vec3(1.0f, 0.0, 0.0);
     }
     ~Main() {
         delete eff;
@@ -505,7 +578,7 @@ public:
         glClearColor(0.5f, 0.5, 0.5, 0);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        scale += 0.001f;
+        scale += 0.01f;
 
         Pipeline p;
         p.scale(1, 1, 1);
@@ -517,15 +590,19 @@ public:
         vec3 up(0.0, 1.0, 0.0);
         p.cam(pos, target, up);
 
-        eff->SetgWorld(p.GetTrans());
+        eff->SetgWVP(p.GetWVPTrans());
+        //const mat4& WorldTrans = p.GetWorldTrans();
+        eff->SetWorld(p.GetWorldTrans());
         eff->SetDirectionalLight(dirLight);
 
         glEnableVertexAttribArray(0);
         glEnableVertexAttribArray(1);
+        glEnableVertexAttribArray(2);
         glBindBuffer(GL_ARRAY_BUFFER, VBO);
 
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), 0);
         glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (const GLvoid*)12);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (const GLvoid*)20);
 
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, IBO);
         tex->bind(GL_TEXTURE0);
@@ -535,6 +612,7 @@ public:
 
         glDisableVertexAttribArray(0);
         glDisableVertexAttribArray(1);
+        glDisableVertexAttribArray(2);
 
         glutPostRedisplay();
 
@@ -558,10 +636,16 @@ public:
         case 's':
             dirLight.AmbientIntensity -= 0.05f;
             break;
+
+        case 'z':
+            dirLight.DiffuseIntensity += 0.05f;
+            break;
+
+        case 'x':
+            dirLight.DiffuseIntensity -= 0.05f;
+            break;
         }
     }
-
-
 };
 
 int main(int argc, char** argv)
