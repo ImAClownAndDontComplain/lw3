@@ -26,11 +26,6 @@ struct Vertex
     }
 };
 
-GLuint VBO;
-GLuint IBO;
-GLint gWorldLocation; 
-GLuint gSampler;
-
 static const char* vertex = "                                                      \n\
     #version 330                                                                   \n\
     layout (location = 0) in vec3 pos;                                             \n\
@@ -46,107 +41,60 @@ static const char* vertex = "                                                   
 static const char* frag = "                                                         \n\
     #version 330                                                                    \n\
     in vec2 tex0;                                                                   \n\
+    struct DirectionalLight                                                         \n\
+    {                                                                               \n\
+        vec3 Color;                                                                 \n\
+        float AmbientIntensity;                                                     \n\
+    };                                                                              \n\
     uniform sampler2D gSampler;                                                     \n\
+    uniform DirectionalLight gDirectionalLight;                                     \n\
     out vec4 fragcolor;                                                             \n\
     void main()                                                                     \n\
     {                                                                               \n\
-        fragcolor = texture2D(gSampler, tex0.xy);                                   \n\
+        fragcolor = texture2D(gSampler, tex0.xy)*                                   \n\
+        vec4(gDirectionalLight.Color, 1.0f) *                                       \n\
+                gDirectionalLight.AmbientIntensity;                                 \n\
     }";
 
-void genshader(GLuint program, const char* shadertext, GLenum shaderType) {
-    GLuint shader = glCreateShader(shaderType);
-
-    const GLchar* ShaderSource[1];
-    ShaderSource[0] = shadertext;
-    glShaderSource(shader, 1, ShaderSource, nullptr);
-
-    glCompileShader(shader);
-
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-    if (!success)
-    {
-        glGetShaderInfoLog(shader, sizeof(InfoLog), nullptr, InfoLog);
-        std::cerr << "Error compiling shader: " << InfoLog << std::endl;
-    }
-    glAttachShader(program, shader);
-}
-void link(GLuint program) {
-    glLinkProgram(program);
-
-    glGetProgramiv(program, GL_LINK_STATUS, &success);
-    if (!success)
-    {
-        glGetProgramInfoLog(program, sizeof(InfoLog), nullptr, InfoLog);
-        std::cerr << "Error linking shader program: " << InfoLog << std::endl;
-    }
-
-    glUseProgram(program);
-
-    gWorldLocation = glGetUniformLocation(program, "gWorld");
-    assert(gWorldLocation != 0xFFFFFFFF);
-}
-void genbuffers() {
-    Vertex Pyramid[4]{
-       Vertex(vec3( -0.2, -0.2, 0),vec2(0,0)),
-       Vertex(vec3( 0.3, -0.2, 0.5),vec2(0.5,0)),
-       Vertex(vec3(0.3, -0.2, -0.5),vec2(1,0)),
-       Vertex(vec3(0, 0.4, 0),vec2(0.5,1)),
+class Pipeline
+{
+private:  
+    struct projection {
+        float FOV;
+        float Width;
+        float Height;
+        float zNear;
+        float zFar;
     };
-
-    glGenBuffers(1, &VBO);
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(Pyramid), Pyramid, GL_STATIC_DRAW);
-
-    unsigned int Indices[] = { 0, 3, 1,
-                               1, 3, 2,
-                               2, 3, 0,
-                               0, 2, 1 };
-
-    glGenBuffers(1, &IBO);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, IBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(Indices), Indices, GL_STATIC_DRAW);
-}
-
-mat4 m = {
+    struct camera {
+        vec3 pos;
+        vec3 target;
+        vec3 up;
+    };
+    mat4 m = {
         m[0][0] = 1.0f, m[0][1] = 0.0f, m[0][2] = 0.0f, m[0][3] = 0.0f,
         m[1][0] = 0.0f, m[1][1] = 1.0f, m[1][2] = 0.0f, m[1][3] = 0.0f,
         m[2][0] = 0.0f, m[2][1] = 0.0f, m[2][2] = 1.0f, m[2][3] = 0.0f,
         m[3][0] = 0.0f, m[3][1] = 0.0f, m[3][2] = 0.0f, m[3][3] = 1.0f,
 };
-struct projection {
-    float FOV;
-    float Width;
-    float Height;
-    float zNear;
-    float zFar;
-};
-vec3 cross(vec3 v1, vec3 v2) {
-    float x = v1.y * v2.z - v1.z * v2.y;
-    float y = v1.z * v2.x - v1.x * v2.z;
-    float z = v1.x * v2.y - v1.y * v2.x;
-    return vec3(x, y, z);
-}
-void norm(vec3& v) {
-    float len = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
-    v.x /= len;
-    v.y /= len;
-    v.z /= len;
-}
-struct camera {
-    vec3 pos;
-    vec3 target;
-    vec3 up;
-};
-
-class Pipeline
-{
-private:
     mat4 ScaleTrans = m, RotateTrans = m, TransTrans = m, Proj = m, Cam = m, CamTrans = m;
     vec3 m_scale, m_trans, m_rot;
     projection myproj;
     camera mycam;
     mat4 m_transform = m;
 
+    vec3 cross(vec3 v1, vec3 v2) {
+        float x = v1.y * v2.z - v1.z * v2.y;
+        float y = v1.z * v2.x - v1.x * v2.z;
+        float z = v1.x * v2.y - v1.y * v2.x;
+        return vec3(x, y, z);
+    }
+    void norm(vec3& v) {
+        float len = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
+        v.x /= len;
+        v.y /= len;
+        v.z /= len;
+    }
     void InitScaleTransform() {
         ScaleTrans = m;
         ScaleTrans[0][0] = m_scale.x;
@@ -259,126 +207,381 @@ mat4* Pipeline::GetTrans()
 }
 
 class Texture {
+private:
+    string filename;
+    GLenum textarget;
+    GLuint texobj;
+    Image* image;
+    Blob blob;
 public:
-    Texture(GLenum target, const string& filename) {
-        m_texturetarget = target;
-        m_filename = filename;
-        m_pimage = nullptr;
+    Texture(GLenum target, const string& name) {
+        textarget = target;
+        filename = name;
+        image = nullptr;
     };
     bool load() {
         try {
-            m_pimage = new Image(m_filename);
-            m_pimage->write(&m_blob, "RGBA");
+            image = new Image(filename);
+            image->write(&blob, "RGBA");
         }
         catch (Error& Error) {
-            cerr << "Error loading texture '" << m_filename << "': " << Error.what() << endl;
+            cerr << "Error loading texture '" << filename << "': " << Error.what() << endl;
             return false;
         }
 
-        glGenTextures(1, &m_textureobj);
-        glBindTexture(m_texturetarget, m_textureobj);
-        glTexImage2D(m_texturetarget, 0, GL_RGB, m_pimage->columns(), m_pimage->rows(), -0.5, GL_RGBA, GL_UNSIGNED_BYTE, m_blob.data());
-        glTexParameterf(m_texturetarget, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameterf(m_texturetarget, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glGenTextures(1, &texobj);
+        glBindTexture(textarget, texobj);
+        glTexImage2D(textarget, 0, GL_RGB, image->columns(), image->rows(), -0.5, GL_RGBA, GL_UNSIGNED_BYTE, blob.data());
+        glTexParameterf(textarget, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameterf(textarget, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
         return true;
     };
     void bind(GLenum unit) {
         glActiveTexture(unit);
-        glBindTexture(m_texturetarget, m_textureobj);
+        glBindTexture(textarget, texobj);
     };
-private:
-    string m_filename;
-    GLenum m_texturetarget;
-    GLuint m_textureobj;
-    Image* m_pimage;
-    Blob m_blob;
+
 };
 
-Texture* pTexture = nullptr;
+class Technique{
+private:
+    GLuint program;
+    typedef list<GLuint> shaderlist;
+    shaderlist shaders;
+protected:
+    bool AddShader(GLenum shadertype, const char* shadertext) {
+        GLuint shader = glCreateShader(shadertype);
 
-void RenderSceneCB()
+        const GLchar* ShaderSource[1];
+        ShaderSource[0] = shadertext;
+        glShaderSource(shader, 1, ShaderSource, nullptr);
+
+        glCompileShader(shader);
+
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+        if (!success)
+        {
+            glGetShaderInfoLog(shader, sizeof(InfoLog), nullptr, InfoLog);
+            cerr << "Error compiling shader: " << InfoLog << endl;
+            return false;
+        }
+        glAttachShader(program, shader);
+        return true;
+    };
+    bool Link() {
+        glLinkProgram(program);
+
+        glGetProgramiv(program, GL_LINK_STATUS, &success);
+        if (success == 0) {
+            glGetProgramInfoLog(program, sizeof(InfoLog), nullptr, InfoLog);
+            cerr << "Error linking shader program: " << InfoLog << endl;
+            return false;
+        }
+        /*
+        glValidateProgram(m_shaderProg);
+        glGetProgramiv(m_shaderProg, GL_VALIDATE_STATUS, &success);
+        if (success == 0) {
+            glGetProgramInfoLog(m_shaderProg, sizeof(InfoLog), nullptr, InfoLog);
+            cerr << "Invalid shader program: " << InfoLog << endl;
+            return false;
+        }*/
+
+        for (shaderlist::iterator it = shaders.begin(); it != shaders.end(); it++) {
+            glDeleteShader(*it);
+        }
+
+        shaders.clear();
+
+        return true;
+    };
+    GLint GetUniformLocation(const char* name) {
+        GLint Location = glGetUniformLocation(program, name);
+
+        if (Location == 0xFFFFFFFF) {
+            cerr << "Warning! Unable to get the location of uniform " << name << endl;
+        }
+        return Location;
+    };
+public:
+    Technique() { program = 0; };
+    ~Technique() {
+        for (shaderlist::iterator it = shaders.begin(); it != shaders.end(); it++) {
+            glDeleteShader(*it);
+        }
+
+        if (program != 0) {
+            glDeleteProgram(program);
+            program = 0;
+        }
+    };
+    virtual bool Init() {
+        program = glCreateProgram();
+
+        if (program == 0) {
+            cerr << "Error creating shader program: " << InfoLog << endl;
+            return false;
+        }
+
+        return true;
+    };
+    void Enable() { glUseProgram(program); };
+};
+
+struct DirectionLight
 {
-    glClearColor(0.5f, 0.5, 0.5, 0);
-    glClear(GL_COLOR_BUFFER_BIT);
+    vec3 Color;
+    float AmbientIntensity;
+};
 
-    scale += 0.001f;
+class LightingTechnique : public Technique{
+private:
+    GLuint gWorldLocation;
+    GLuint samplerLocation;
+    GLuint dirLightColorLocation;
+    GLuint dirLightAmbientIntensityLocation;
+public:
+    LightingTechnique() {};
 
-    Pipeline p;
-    p.scale(1, 1, 1);
-    p.trans(0.0f, 0.0f, 0);
-    p.rotate(0, scale, 0);
-    p.proj(60.0f, winW, winH, 1.0f, 100.0f);
-    vec3 pos(0.0, 0.0, -3.0);
-    vec3 target(0.0, 0.0, 2.0);
-    vec3 up(0.0, 1.0, 0.0);
-    p.cam(pos, target, up);
+    virtual bool Init() {
+        if (!Technique::Init()) return false;
+        if (!AddShader(GL_VERTEX_SHADER, vertex)) return false;
+        if (!AddShader(GL_FRAGMENT_SHADER, frag)) return false;
+        if (!Link())  return false;
 
-    glUniformMatrix4fv(gWorldLocation, 1, GL_TRUE, (const GLfloat*)p.GetTrans());
+        gWorldLocation = GetUniformLocation("gWorld");
+        samplerLocation = GetUniformLocation("gSampler");
+        dirLightColorLocation = GetUniformLocation("gDirectionalLight.Color");
+        dirLightAmbientIntensityLocation = GetUniformLocation("gDirectionalLight.AmbientIntensity");
 
-    glEnableVertexAttribArray(0);
-    glEnableVertexAttribArray(1);
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+        if (dirLightAmbientIntensityLocation == 0xFFFFFFFF || gWorldLocation == 0xFFFFFFFF || samplerLocation == 0xFFFFFFFF || dirLightColorLocation == 0xFFFFFFFF)  return false;
+      
+        return true;
+    };
 
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), 0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (const GLvoid*)12);
+    void SetgWorld(const mat4* gWorld) {
+            glUniformMatrix4fv(gWorldLocation, 1, GL_TRUE, (const GLfloat*)gWorld);      
+    };
 
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, IBO);
-    pTexture->bind(GL_TEXTURE0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
+    void SetTextureUnit(unsigned int unit) {
+        glUniform1i(samplerLocation, unit);
+    };
 
-    glDrawElements(GL_TRIANGLES, 12, GL_UNSIGNED_INT, 0);
+    void SetDirectionalLight(const DirectionLight& Light) {
+        glUniform3f(dirLightColorLocation, Light.Color.x, Light.Color.y, Light.Color.z);
+        glUniform1f(dirLightAmbientIntensityLocation, Light.AmbientIntensity);
+    };
+};
 
-    glDisableVertexAttribArray(0);
-    glDisableVertexAttribArray(1);
+class ICallbacks
+{
+public:
+    virtual void KeyboardCB(unsigned char Key, int x, int y) = 0;
+    virtual void RenderSceneCB() = 0;
+    virtual void IdleCB() = 0;
+};
 
-    glutPostRedisplay();
+void GLUTBackendInit(int argc, char** argv) {
+    glutInit(&argc, argv);
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA);
+    InitializeMagick(*argv);
+};
 
-    glutSwapBuffers();
+bool GLUTBackendCreateWindow(unsigned int Width, unsigned int Height, const char* name) {
+    glutInitWindowSize(Width, Height);
+    glutInitWindowPosition(100, 100);
+    glutCreateWindow(name);
+    GLenum res = glewInit();
+    if (res != GLEW_OK) {
+        cerr << "Error: " << glewGetErrorString(res) << endl;
+        return false;
+    }
+    return true;
+};
+
+ICallbacks* callbacks = nullptr;
+
+void RenderScene() {
+    callbacks->RenderSceneCB();
 }
+
+void Idle() {
+    callbacks->IdleCB();
+}
+
+void Keyboard(unsigned char Key, int x, int y) {
+    callbacks->KeyboardCB(Key, x, y);
+}
+
+void cb() {
+    glutDisplayFunc(RenderScene);
+    glutIdleFunc(Idle);
+    glutKeyboardFunc(Keyboard);
+}
+
+void GLUTBackendRun(ICallbacks* p) {
+    if (!p) {
+        fprintf(stderr, "%s : callbacks not specified!\n", __FUNCTION__);
+        return;
+    }
+    /*glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glFrontFace(GL_CW);
+    glCullFace(GL_BACK);
+    glEnable(GL_CULL_FACE);*/
+
+    callbacks = p;
+    cb();
+    glutMainLoop();
+};
+
+class Main : public ICallbacks
+{
+private:
+    GLuint VBO;
+    GLuint IBO;
+    LightingTechnique* eff;
+
+    Texture* tex;
+    DirectionLight dirLight;
+    void genbuffers() {
+        Vertex Pyramid[4]{
+        Vertex(vec3(-0.2, -0.2, 0),vec2(0,0)),
+        Vertex(vec3(0.3, -0.2, 0.5),vec2(0.5,0)),
+        Vertex(vec3(0.3, -0.2, -0.5),vec2(1,0)),
+        Vertex(vec3(0, 0.4, 0),vec2(0.5,1)),
+        };
+
+        glGenBuffers(1, &VBO);
+        glBindBuffer(GL_ARRAY_BUFFER, VBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(Pyramid), Pyramid, GL_STATIC_DRAW);
+
+        unsigned int Indices[] = { 0, 3, 1,
+                                   1, 3, 2,
+                                   2, 3, 0,
+                                   0, 2, 1 };
+
+
+        glGenBuffers(1, &IBO);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, IBO);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(Indices), Indices, GL_STATIC_DRAW);
+    }
+public:
+    Main()
+    {
+        tex = nullptr;
+        eff = nullptr;
+        dirLight.Color = vec3(1.0f, 1.0f, 1.0f);
+        dirLight.AmbientIntensity = 0.5f;
+    }
+    ~Main() {
+        delete eff;
+        delete tex;
+    };
+    bool Init()
+    {
+        genbuffers();
+        eff = new LightingTechnique();
+        if (!eff->Init())
+        {
+            return false;
+        }
+        eff->Enable();
+        eff->SetTextureUnit(0);
+
+        tex = new Texture(GL_TEXTURE_2D, "exo1.png");
+
+        if (!tex->load()) {
+            return false;
+        }
+
+        return true;
+    }
+    void Run()
+    {
+        GLUTBackendRun(this);
+    }
+    virtual void RenderSceneCB()
+    {
+        glClearColor(0.5f, 0.5, 0.5, 0);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        scale += 0.001f;
+
+        Pipeline p;
+        p.scale(1, 1, 1);
+        p.trans(0.0f, 0.0f, 0);
+        p.rotate(0, scale, 0);
+        p.proj(60.0f, winW, winH, 1.0f, 100.0f);
+        vec3 pos(0.0, 0.0, -3.0);
+        vec3 target(0.0, 0.0, 2.0);
+        vec3 up(0.0, 1.0, 0.0);
+        p.cam(pos, target, up);
+
+        eff->SetgWorld(p.GetTrans());
+        eff->SetDirectionalLight(dirLight);
+
+        glEnableVertexAttribArray(0);
+        glEnableVertexAttribArray(1);
+        glBindBuffer(GL_ARRAY_BUFFER, VBO);
+
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), 0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (const GLvoid*)12);
+
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, IBO);
+        tex->bind(GL_TEXTURE0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
+
+        glDrawElements(GL_TRIANGLES, 12, GL_UNSIGNED_INT, 0);
+
+        glDisableVertexAttribArray(0);
+        glDisableVertexAttribArray(1);
+
+        glutPostRedisplay();
+
+        glutSwapBuffers();
+    }
+    virtual void IdleCB()
+    {
+        RenderSceneCB();
+    }
+    virtual void KeyboardCB(unsigned char Key, int x, int y)
+    {
+        switch (Key) {
+        case 'q':
+            glutLeaveMainLoop();
+            break;
+
+        case 'a':
+            dirLight.AmbientIntensity += 0.05f;
+            break;
+
+        case 's':
+            dirLight.AmbientIntensity -= 0.05f;
+            break;
+        }
+    }
+
+
+};
 
 int main(int argc, char** argv)
 {
-    glutInit(&argc, argv);
-    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA);
-    glutInitWindowSize(winW, winH);
-    glutInitWindowPosition(100, 100);
-    glutCreateWindow("IDKWTD");
+    GLUTBackendInit(argc, argv);
 
-    GLenum res = glewInit();
-    if (res != GLEW_OK) {
-        std::cerr << "Error: " << glewGetErrorString(res) << std::endl;
+    if (!GLUTBackendCreateWindow(winW, winH, "IDKWTD")) {
         return 1;
     }
-    InitializeMagick(*argv);
-    genbuffers();
-
-    GLuint program = glCreateProgram();
-    genshader(program, vertex, GL_VERTEX_SHADER);
-    genshader(program, frag, GL_FRAGMENT_SHADER);
-    link(program);
-
-    //GLuint vshader = genshader(program, vertex, GL_VERTEX_SHADER);
-    //GLuint fshader = genshader(program, frag, GL_FRAGMENT_SHADER);
-    //bindshader(program, vshader);
-    //bindshader(program, fshader);
-   // glLinkProgram(program);
-   // glUseProgram(program);
-   // gWorldLocation = glGetUniformLocation(program, "gWorld");
-   // assert(gWorldLocation != 0xFFFFFFFF);
     /*glFrontFace(GL_CW);
     glCullFace(GL_BACK);
     glEnable(GL_CULL_FACE);*/
 
-    glUniform1i(gSampler, 0);
+    Main* pApp = new Main();
 
-    pTexture = new Texture(GL_TEXTURE_2D, "exo1.png");
+    if (!pApp->Init()) return 1;
 
-    if (!pTexture->load()) {
-        return 1;
-    }
-    glutDisplayFunc(RenderSceneCB);
-    glutIdleFunc(RenderSceneCB);
+    pApp->Run();
 
-    glutMainLoop();
+    delete pApp;
+
+    return 0;
 }
